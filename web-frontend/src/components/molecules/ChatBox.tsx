@@ -25,7 +25,7 @@ interface ChatHistoryItem {
 
 export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JSX.Element {
 	// URL API Gateway
-	const API_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080'}/api/v1/ai/consult`;
+	const API_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080'}/api/v1/ai/chat`;
 
 	const [messages, setMessages] = useState<Message[]>([
 		{
@@ -87,21 +87,36 @@ export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JS
 		setIsTyping(true)
 
 		try {
-			// 2. Chuẩn bị History
-			const history: ChatHistoryItem[] = messages
-				.filter(m => m.type === 'text')
-				.map(m => ({
-					role: m.sender === 'user' ? 'user' : 'assistant',
-					content: m.content
-				}));
+			// 2. Chuẩn bị messages array (bao gồm history + message mới)
+			const chatMessages: ChatHistoryItem[] = [
+				...messages
+					.filter(m => m.type === 'text')
+					.map(m => ({
+						role: (m.sender === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+						content: m.content
+					})),
+				{
+					role: 'user' as const,
+					content: content
+				}
+			];
 
 			// 3. Gọi API Backend (8080)
+			const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
+			
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json'
+			};
+			
+			if (token) {
+				headers['Authorization'] = `Bearer ${token}`;
+			}
+			
 			const response = await fetch(API_URL, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers,
 				body: JSON.stringify({
-					message: content,
-					history: history
+					messages: chatMessages
 				})
 			});
 

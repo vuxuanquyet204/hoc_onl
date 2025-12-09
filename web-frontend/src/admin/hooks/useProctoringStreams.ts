@@ -32,7 +32,7 @@ const isBrowser = typeof window !== 'undefined'
 const DEFAULT_SERVER_URL =
 	(typeof window !== 'undefined' && (window as any)?.__PROCTORING_WS_URL) ??
 	((import.meta as any)?.env?.VITE_PROCTORING_WS_URL as string | undefined) ??
-	`${import.meta.env.VITE_API_BASE_URL?.replace('http://', 'ws://').replace('https://', 'wss://') || 'ws://localhost:8080'}/socket.io`
+	(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080')
 
 export function useProctoringStreams(
 	allSessions: ProctoringSession[],
@@ -143,20 +143,56 @@ export function useProctoringStreams(
 			}
 
 			const socket = io(serverUrl, {
+				path: '/socket.io',
 				query: {
 					examId,
 					userId: proctorId,
 					userType: 'proctor'
 				},
-				transports: ['websocket']
+				transports: ['websocket'],
+				reconnection: true,
+				reconnectionAttempts: 5,
+				reconnectionDelay: 1000,
+				reconnectionDelayMax: 5000,
+				timeout: 20000
 			})
 
 			socket.on('connect', () => {
-				console.info(`[Proctoring] Kết nối socket thành công cho exam ${examId}`)
+				// Socket connected
+			})
+
+			socket.on('connected', () => {
+				// Server confirmed connection
+			})
+
+			socket.on('connect_error', () => {
+				// Connection error
+			})
+
+			socket.on('reconnect', () => {
+				// Reconnected
+			})
+
+			socket.on('reconnect_attempt', () => {
+				// Attempting to reconnect
+			})
+
+			socket.on('reconnect_error', () => {
+				// Reconnection error
+			})
+
+			socket.on('reconnect_failed', () => {
+				// Reconnection failed
+				const relatedSessions = sessionsRef.current.filter(
+					session => session.examId === examId
+				)
+				for (const session of relatedSessions) {
+					stopStream(session.id, 'error', 'Không thể kết nối lại với máy chủ giám sát')
+				}
 			})
 
 			socket.on('disconnect', () => {
-				console.warn(`[Proctoring] Socket exam ${examId} bị ngắt kết nối`)
+				// Socket disconnected
 				const relatedSessions = sessionsRef.current.filter(
 					session => session.examId === examId
 				)
@@ -190,9 +226,6 @@ export function useProctoringStreams(
 					)
 
 					if (!targetSession) {
-						console.warn(
-							`[Proctoring] Nhận offer từ sinh viên ${studentId} nhưng không tìm thấy session phù hợp`
-						)
 						return
 					}
 
@@ -211,18 +244,9 @@ export function useProctoringStreams(
 
 						pc.ontrack = event => {
 							const [remoteStream] = event.streams
-							if (!remoteStream) {
-								console.warn('[Proctoring] Nhận ontrack event nhưng không có stream')
+							if (!remoteStream || remoteStream.getTracks().length === 0) {
 								return
 							}
-
-							// Kiểm tra stream có tracks không
-							if (remoteStream.getTracks().length === 0) {
-								console.warn('[Proctoring] Stream không có tracks')
-								return
-							}
-
-							console.log(`[Proctoring] Nhận stream từ student ${studentId}, tracks:`, remoteStream.getTracks().map(t => t.kind))
 
 							setStreamStates(prev => ({
 								...prev,
@@ -247,7 +271,6 @@ export function useProctoringStreams(
 
 						pc.onconnectionstatechange = () => {
 							const state = pc.connectionState
-							console.log(`[Proctoring] Connection state cho session ${sessionId}:`, state)
 							if (state === 'failed') {
 								stopStream(
 									sessionId,
@@ -294,7 +317,6 @@ export function useProctoringStreams(
 							}
 						}))
 					} catch (error) {
-						console.error('[Proctoring] Lỗi xử lý WebRTC offer:', error)
 						stopStream(
 							sessionId,
 							'error',
@@ -328,10 +350,7 @@ export function useProctoringStreams(
 							await peerInfo.pc.addIceCandidate(null)
 						}
 					} catch (error) {
-						console.error(
-							'[Proctoring] Lỗi khi thêm ICE candidate:',
-							error
-						)
+						// Error adding ICE candidate
 					}
 				}
 			)
@@ -348,7 +367,6 @@ export function useProctoringStreams(
 
 			const session = sessionsRef.current.find(s => s.id === sessionId)
 			if (!session) {
-				console.warn('[Proctoring] Không tìm thấy session để yêu cầu stream', sessionId)
 				return
 			}
 

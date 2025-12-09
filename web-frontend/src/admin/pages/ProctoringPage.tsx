@@ -73,49 +73,86 @@ export default function ProctoringPage(): JSX.Element {
 			return allSessions
 		}
 
-		const merged = new Map<string, ProctoringSession>(allSessions.map(session => [session.id, session]))
+		// Tạo map theo sessionId từ allSessions
+		const sessionById = new Map<string, ProctoringSession>(
+			allSessions.map(session => [session.id, session])
+		)
 
+		// Tạo map theo userId+examId để tìm session khi không có sessionId
+		// Normalize userId về string để đảm bảo match
+		const sessionByUserExam = new Map<string, ProctoringSession>()
+		for (const session of allSessions) {
+			const normalizedUserId = String(session.userId)
+			const key = `${session.examId}::${normalizedUserId}`
+			sessionByUserExam.set(key, session)
+		}
+
+		const merged = new Map<string, ProctoringSession>()
+
+		// Thêm tất cả sessions hiện có vào merged
+		for (const session of allSessions) {
+			merged.set(session.id, session)
+		}
+
+		// Merge hoặc thêm từ roster
 		for (const entry of activeRoster) {
-			const normalizedId = entry.sessionId && entry.sessionId.trim().length > 0
-				? entry.sessionId
-				: `${entry.examId ?? 'exam'}::${entry.studentId ?? 'student'}`
+			let existingSession: ProctoringSession | undefined
 
-			const existing = merged.get(normalizedId)
-			if (existing) {
-				merged.set(normalizedId, {
-					...existing,
-					startTime: existing.startTime || entry.startedAt || existing.startTime,
-					duration: existing.duration || (entry.timeSpentSeconds ? Math.floor(entry.timeSpentSeconds / 60) : existing.duration),
-					lastPing: entry.lastUpdatedAt || existing.lastPing,
+			// Ưu tiên tìm theo sessionId nếu có
+			if (entry.sessionId && entry.sessionId.trim().length > 0) {
+				existingSession = sessionById.get(entry.sessionId)
+			}
+
+			// Nếu không tìm thấy, thử tìm theo userId + examId
+			if (!existingSession && entry.examId && entry.studentId !== null && entry.studentId !== undefined) {
+				const normalizedStudentId = String(entry.studentId)
+				// Skip nếu studentId không hợp lệ (là placeholder như "student")
+				if (normalizedStudentId !== 'student' && normalizedStudentId !== 'unknown') {
+					const key = `${entry.examId}::${normalizedStudentId}`
+					existingSession = sessionByUserExam.get(key)
+				}
+			}
+
+			if (existingSession) {
+				// Update session hiện có với thông tin mới từ roster
+				merged.set(existingSession.id, {
+					...existingSession,
+					startTime: existingSession.startTime || entry.startedAt || existingSession.startTime,
+					duration: existingSession.duration || (entry.timeSpentSeconds ? Math.floor(entry.timeSpentSeconds / 60) : existingSession.duration),
+					lastPing: entry.lastUpdatedAt || existingSession.lastPing,
 				})
 			} else {
-				merged.set(normalizedId, {
-					id: normalizedId,
-					examId: entry.examId ? String(entry.examId) : 'unknown',
-					examTitle: entry.examTitle ?? `Bài thi ${entry.examId ?? '—'}`,
-					userId: entry.studentId !== null && entry.studentId !== undefined ? String(entry.studentId) : 'unknown',
-					userName: `Thí sinh ${entry.studentId ?? '—'}`,
-					userAvatar: undefined,
-					startTime: entry.startedAt ?? new Date().toISOString(),
-					endTime: null,
-					duration: entry.timeSpentSeconds ? Math.floor(entry.timeSpentSeconds / 60) : 0,
-					status: 'active',
-					riskLevel: 'low',
-					cameraEnabled: true,
-					audioEnabled: true,
-					videoStreamUrl: undefined,
-					faceDetected: true,
-					faceCount: 1,
-					gazeDirection: 'center',
-					audioDetected: false,
-					totalViolations: 0,
-					violations: [],
-					tabSwitches: 0,
-					fullscreenExited: 0,
-					browserChanged: false,
-					connectionStatus: 'online',
-					lastPing: entry.lastUpdatedAt,
-				})
+				// Chỉ tạo session mới nếu có sessionId hợp lệ từ roster
+				// Nếu không có sessionId và không match được, bỏ qua entry này
+				if (entry.sessionId && entry.sessionId.trim().length > 0) {
+					merged.set(entry.sessionId, {
+						id: entry.sessionId,
+						examId: entry.examId ? String(entry.examId) : 'unknown',
+						examTitle: entry.examTitle ?? `Bài thi ${entry.examId ?? '—'}`,
+						userId: entry.studentId !== null && entry.studentId !== undefined ? String(entry.studentId) : 'unknown',
+						userName: `Thí sinh ${entry.studentId ?? '—'}`,
+						userAvatar: undefined,
+						startTime: entry.startedAt ?? new Date().toISOString(),
+						endTime: undefined,
+						duration: entry.timeSpentSeconds ? Math.floor(entry.timeSpentSeconds / 60) : 0,
+						status: 'active',
+						riskLevel: 'low',
+						cameraEnabled: true,
+						audioEnabled: true,
+						videoStreamUrl: undefined,
+						faceDetected: true,
+						faceCount: 1,
+						gazeDirection: 'center',
+						audioDetected: false,
+						totalViolations: 0,
+						violations: [],
+						tabSwitches: 0,
+						fullscreenExited: 0,
+						browserChanged: false,
+						connectionStatus: 'online',
+						lastPing: entry.lastUpdatedAt ?? undefined,
+					})
+				}
 			}
 		}
 

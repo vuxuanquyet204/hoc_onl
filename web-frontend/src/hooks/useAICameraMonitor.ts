@@ -14,7 +14,7 @@ const isBrowser = typeof window !== 'undefined';
 const DEFAULT_PROCTORING_WS_URL =
   (isBrowser && (window as any)?.__PROCTORING_WS_URL) ??
   ((import.meta as any)?.env?.VITE_PROCTORING_WS_URL as string | undefined) ??
-  `${import.meta.env.VITE_API_BASE_URL?.replace('http://', 'ws://').replace('https://', 'wss://') || 'ws://localhost:8080'}/socket.io`;
+  (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080');
 
 export interface CheatingDetection {
   type: 'FACE_NOT_DETECTED' | 'MULTIPLE_FACES' | 'MOBILE_PHONE_DETECTED' | 'CAMERA_TAMPERED' | 'LOOKING_AWAY' | 'tab_switch';
@@ -233,12 +233,18 @@ export const useAICameraMonitor = (props?: UseAICameraMonitorProps): AICameraMon
     const normalizedStudentId = String(studentId);
 
     const socket = io(serverUrl, {
+      path: '/socket.io',
       query: {
         examId: normalizedExamId,
         userId: normalizedStudentId,
         userType: 'student',
       },
       transports: ['websocket'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
     });
 
     socketRef.current = socket;
@@ -407,6 +413,49 @@ export const useAICameraMonitor = (props?: UseAICameraMonitorProps): AICameraMon
       }
     };
 
+    const handleConnect = () => {
+      console.log('[AICameraMonitor] ✅ WebSocket connected:', {
+        socketId: socket.id,
+        examId: normalizedExamId,
+        studentId: normalizedStudentId
+      });
+    };
+
+    const handleConnected = (data: { socketId?: string; examId?: string; userId?: string; userType?: string; timestamp?: number }) => {
+      console.log('[AICameraMonitor] ✅ Server confirmed connection:', data);
+      updateState({ error: null });
+    };
+
+    const handleConnectError = (error: Error) => {
+      console.error('[AICameraMonitor] ❌ WebSocket connection error:', error.message);
+      updateState({ error: `Lỗi kết nối: ${error.message}` });
+    };
+
+    const handleReconnect = (attemptNumber: number) => {
+      console.log(`[AICameraMonitor] 🔄 WebSocket reconnected after ${attemptNumber} attempts`);
+      updateState({ error: null });
+    };
+
+    const handleReconnectAttempt = (attemptNumber: number) => {
+      console.log(`[AICameraMonitor] 🔄 Attempting to reconnect (${attemptNumber})...`);
+    };
+
+    const handleReconnectError = (error: Error) => {
+      console.error('[AICameraMonitor] ❌ Reconnection error:', error.message);
+    };
+
+    const handleReconnectFailed = () => {
+      console.error('[AICameraMonitor] ❌ Reconnection failed after all attempts');
+      updateState({ error: 'Không thể kết nối lại với máy chủ. Vui lòng tải lại trang.' });
+    };
+
+    socket.on('connect', handleConnect);
+    socket.on('connected', handleConnected);
+    socket.on('connect_error', handleConnectError);
+    socket.on('reconnect', handleReconnect);
+    socket.on('reconnect_attempt', handleReconnectAttempt);
+    socket.on('reconnect_error', handleReconnectError);
+    socket.on('reconnect_failed', handleReconnectFailed);
     socket.on('webrtc_offer_request', handleOfferRequest);
     socket.on('webrtc_answer_received', handleAnswerReceived);
     socket.on('webrtc_ice_candidate_received', handleIceCandidateReceived);
@@ -415,6 +464,13 @@ export const useAICameraMonitor = (props?: UseAICameraMonitorProps): AICameraMon
     socket.on('disconnect', handleSocketDisconnect);
 
     return () => {
+      socket.off('connect', handleConnect);
+      socket.off('connected', handleConnected);
+      socket.off('connect_error', handleConnectError);
+      socket.off('reconnect', handleReconnect);
+      socket.off('reconnect_attempt', handleReconnectAttempt);
+      socket.off('reconnect_error', handleReconnectError);
+      socket.off('reconnect_failed', handleReconnectFailed);
       socket.off('webrtc_offer_request', handleOfferRequest);
       socket.off('webrtc_answer_received', handleAnswerReceived);
       socket.off('webrtc_ice_candidate_received', handleIceCandidateReceived);

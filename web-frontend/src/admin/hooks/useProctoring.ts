@@ -14,7 +14,7 @@ const isBrowser = typeof window !== 'undefined'
 const DEFAULT_PROCTORING_WS_URL =
 	(isBrowser && (window as any)?.__PROCTORING_WS_URL) ??
 	((import.meta as any)?.env?.VITE_PROCTORING_WS_URL as string | undefined) ??
-	`${import.meta.env.VITE_API_BASE_URL?.replace('http://', 'ws://').replace('https://', 'wss://') || 'ws://localhost:8080'}/socket.io`
+	(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080')
 
 export default function useProctoring() {
 	const [sessions, setSessions] = useState<ProctoringSession[]>([])
@@ -176,25 +176,54 @@ export default function useProctoring() {
 			}
 
 			const socket = io(DEFAULT_PROCTORING_WS_URL, {
+				path: '/socket.io',
 				query: {
 					examId: String(examId),
 					userId: 'admin-dashboard',
 					userType: 'proctor'
 				},
-				transports: ['websocket']
+				transports: ['websocket'],
+				reconnection: true,
+				reconnectionAttempts: 5,
+				reconnectionDelay: 1000,
+				reconnectionDelayMax: 5000,
+				timeout: 20000
 			})
 
 			socket.on('connect', () => {
-				console.log(`[useProctoring] WebSocket connected for exam ${examId}`)
+				// WebSocket connected
+			})
+
+			socket.on('connected', () => {
+				// Server confirmed connection
+			})
+
+			socket.on('connect_error', () => {
+				// Connection error
+			})
+
+			socket.on('reconnect', () => {
+				// Reconnected
+			})
+
+			socket.on('reconnect_attempt', () => {
+				// Attempting to reconnect
+			})
+
+			socket.on('reconnect_error', () => {
+				// Reconnection error
+			})
+
+			socket.on('reconnect_failed', () => {
+				// Reconnection failed
 			})
 
 			socket.on('disconnect', () => {
-				console.warn(`[useProctoring] WebSocket disconnected for exam ${examId}`)
+				// WebSocket disconnected
 			})
 
 			// Listen for proctoring alerts (violations)
 			socket.on('proctoring_alert', (event: any) => {
-				console.log('[useProctoring] Received proctoring_alert:', event)
 				
 				// Find the session that matches this event
 				const sessionId = event.sessionId || event.id
@@ -265,7 +294,6 @@ export default function useProctoring() {
 
 			// Listen for session status updates (camera, mic, face, connection)
 			socket.on('session_status_update', (update: any) => {
-				console.log('[useProctoring] Received session_status_update:', update)
 				
 				const sessionId = update.sessionId
 				if (!sessionId) return
@@ -302,7 +330,6 @@ export default function useProctoring() {
 
 			// ✅ Listen for session completed event - tự động remove session khỏi danh sách
 			socket.on('proctoring_session_completed', (data: any) => {
-				console.log('[useProctoring] Received proctoring_session_completed:', data)
 				
 				const sessionId = data.sessionId || data.id
 				if (!sessionId) return
@@ -322,7 +349,6 @@ export default function useProctoring() {
 						return prevSelected
 					})
 
-					console.log(`[useProctoring] Đã tự động ẩn session ${sessionId} vì đã hoàn thành`)
 					return newSessions
 				})
 			})
@@ -401,10 +427,6 @@ export default function useProctoring() {
 	// Send warning
 	const sendWarning = useCallback(async (sessionId: string) => {
 		const success = await proctoringApi.sendWarning(sessionId)
-		if (success) {
-			// Optionally update UI to show warning was sent
-			console.log(`Warning sent to session ${sessionId}`)
-		}
 		return success
 	}, [])
 

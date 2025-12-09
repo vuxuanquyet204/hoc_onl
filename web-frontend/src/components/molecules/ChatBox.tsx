@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { MessageCircle, X, Send, Minimize2, Maximize2 } from 'lucide-react'
+import { MessageCircle, X, Minimize2, Maximize2, Volume2, VolumeX } from 'lucide-react'
 import ChatMessage from './ChatMessage'
 import ChatInput from './ChatInput'
 import styles from '../../assets/css/ChatBox.module.css'
@@ -18,11 +18,19 @@ interface ChatBoxProps {
 	onClose: () => void
 }
 
+interface ChatHistoryItem {
+	role: 'user' | 'assistant';
+	content: string;
+}
+
 export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JSX.Element {
+	// URL API Gateway
+	const API_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080'}/api/v1/ai/consult`;
+
 	const [messages, setMessages] = useState<Message[]>([
 		{
 			id: '1',
-			content: 'Xin chào! Tôi có thể giúp gì cho bạn hôm nay?',
+			content: 'Xin chào! Tôi là trợ lý AI. Tôi có thể giúp gì cho việc học của bạn hôm nay?',
 			sender: 'bot',
 			timestamp: new Date(),
 			type: 'text'
@@ -30,6 +38,8 @@ export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JS
 	])
 	const [isMinimized, setIsMinimized] = useState(false)
 	const [isTyping, setIsTyping] = useState(false)
+	const [isSoundOn, setIsSoundOn] = useState(true) // Giữ lại nút bật tắt loa để nghe AI nói
+
 	const messagesEndRef = useRef<HTMLDivElement>(null)
 
 	const scrollToBottom = () => {
@@ -38,11 +48,34 @@ export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JS
 
 	useEffect(() => {
 		scrollToBottom()
-	}, [messages])
+	}, [messages, isTyping])
 
-	const handleSendMessage = (content: string) => {
-		if (!content.trim()) return
+	// --- HÀM XỬ LÝ TEXT (Xóa markdown) ---
+	const cleanMarkdown = (text: string): string => {
+		if (!text) return "";
+		return text
+			.replace(/\*\*/g, '')
+			.replace(/\*/g, '•')
+			.replace(/`/g, '')
+			.replace(/#{1,6}\s/g, '');
+	}
 
+	// --- HÀM ĐỌC VĂN BẢN (Text-to-Speech) ---
+	const speakText = (text: string) => {
+		if (!isSoundOn || !window.speechSynthesis) return;
+		window.speechSynthesis.cancel();
+
+		const textToRead = text.replace(/[*`#\-]/g, '');
+		const utterance = new SpeechSynthesisUtterance(textToRead);
+		utterance.lang = 'vi-VN';
+		window.speechSynthesis.speak(utterance);
+	}
+
+	// --- HÀM GỬI TIN NHẮN ---
+	const handleSendMessage = async (content: string) => {
+		if (!content || !content.trim()) return
+
+		// 1. Hiển thị tin nhắn User
 		const userMessage: Message = {
 			id: Date.now().toString(),
 			content: content.trim(),
@@ -50,95 +83,126 @@ export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JS
 			timestamp: new Date(),
 			type: 'text'
 		}
-
 		setMessages(prev => [...prev, userMessage])
-
-		// Simulate bot typing
 		setIsTyping(true)
-		setTimeout(() => {
-			const botMessage: Message = {
+
+		try {
+			// 2. Chuẩn bị History
+			const history: ChatHistoryItem[] = messages
+				.filter(m => m.type === 'text')
+				.map(m => ({
+					role: m.sender === 'user' ? 'user' : 'assistant',
+					content: m.content
+				}));
+
+			// 3. Gọi API Backend (8080)
+			const response = await fetch(API_URL, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					message: content,
+					history: history
+				})
+			});
+
+			const data = await response.json();
+
+			if (response.ok && data.success) {
+				const rawContent = data.data.content;
+				const displayContent = cleanMarkdown(rawContent);
+
+				const botMessage: Message = {
+					id: (Date.now() + 1).toString(),
+					content: displayContent,
+					sender: 'bot',
+					timestamp: new Date(),
+					type: 'text'
+				}
+				setMessages(prev => [...prev, botMessage])
+				speakText(rawContent); // AI Đọc câu trả lời
+			} else {
+				throw new Error(data.message || 'Lỗi kết nối');
+			}
+
+		} catch (error) {
+			console.error("Chat Error:", error);
+			const errorMessage: Message = {
 				id: (Date.now() + 1).toString(),
-				content: 'Cảm ơn bạn đã nhắn tin! Đây là phản hồi tự động. Backend sẽ được kết nối sau.',
+				content: 'Xin lỗi, tôi đang gặp sự cố kết nối.',
 				sender: 'bot',
 				timestamp: new Date(),
 				type: 'text'
 			}
-			setMessages(prev => [...prev, botMessage])
+			setMessages(prev => [...prev, errorMessage])
+		} finally {
 			setIsTyping(false)
-		}, 1500)
+		}
 	}
 
-	const handleMinimize = () => {
-		setIsMinimized(!isMinimized)
+	const toggleSound = () => {
+		if (isSoundOn) window.speechSynthesis.cancel();
+		setIsSoundOn(!isSoundOn);
 	}
 
 	if (!isOpen) {
 		return (
 			<div className={styles.chatToggle} onClick={onToggle}>
 				<MessageCircle size={24} />
-				<div className={styles.chatBadge}>
-					<span>1</span>
-				</div>
+				<div className={styles.chatBadge}><span>1</span></div>
 			</div>
 		)
 	}
 
 	return (
 		<div className={`${styles.chatBox} ${isMinimized ? styles.minimized : ''}`}>
-			{/* Chat Header */}
+			{/* Header */}
 			<div className={styles.chatHeader}>
 				<div className={styles.chatTitle}>
 					<MessageCircle size={20} />
-					<span>Hỗ trợ học tập</span>
+					<span>Trợ lý AI</span>
 					<div className={styles.onlineStatus}></div>
 				</div>
 				<div className={styles.chatActions}>
-					<button 
+					<button
 						className={styles.actionButton}
-						onClick={handleMinimize}
-						title={isMinimized ? 'Mở rộng' : 'Thu nhỏ'}
+						onClick={toggleSound}
+						title={isSoundOn ? "Tắt tiếng" : "Bật tiếng"}
+						style={{ marginRight: '5px' }}
 					>
+						{isSoundOn ? <Volume2 size={16} /> : <VolumeX size={16} />}
+					</button>
+					<button className={styles.actionButton} onClick={() => setIsMinimized(!isMinimized)}>
 						{isMinimized ? <Maximize2 size={16} /> : <Minimize2 size={16} />}
 					</button>
-					<button 
-						className={styles.actionButton}
-						onClick={onClose}
-						title="Đóng chat"
-					>
+					<button className={styles.actionButton} onClick={onClose}>
 						<X size={16} />
 					</button>
 				</div>
 			</div>
 
-			{/* Chat Content */}
+			{/* Content */}
 			{!isMinimized && (
 				<>
-					{/* Messages Area */}
 					<div className={styles.messagesArea}>
 						<div className={styles.messagesContainer}>
 							{messages.map((message) => (
-								<ChatMessage
-									key={message.id}
-									message={message}
-								/>
+								<ChatMessage key={message.id} message={message} />
 							))}
 							{isTyping && (
 								<div className={styles.typingIndicator}>
 									<div className={styles.typingDots}>
-										<span></span>
-										<span></span>
-										<span></span>
+										<span></span><span></span><span></span>
 									</div>
-									<span className={styles.typingText}>Đang trả lời...</span>
+									<span className={styles.typingText}>AI đang trả lời...</span>
 								</div>
 							)}
 							<div ref={messagesEndRef} />
 						</div>
 					</div>
 
-					{/* Input Area */}
+					{/* Input Area: Chỉ việc nhúng ChatInput vào */}
 					<div className={styles.inputArea}>
-						<ChatInput onSendMessage={handleSendMessage} />
+						<ChatInput onSendMessage={handleSendMessage} disabled={isTyping} />
 					</div>
 				</>
 			)}

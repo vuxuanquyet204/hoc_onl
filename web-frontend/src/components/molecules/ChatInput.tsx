@@ -1,6 +1,12 @@
-import React, { useState, useRef, KeyboardEvent, useEffect } from 'react'
+import React, { useState, useRef, useEffect, KeyboardEvent } from 'react'
 import { Send, Paperclip, Smile, Mic, MicOff } from 'lucide-react'
 import styles from '../../assets/css/ChatBox.module.css'
+
+// Định nghĩa kiểu cho Web Speech API
+interface IWindow extends Window {
+	webkitSpeechRecognition: any;
+	SpeechRecognition: any;
+}
 
 interface ChatInputProps {
 	onSendMessage: (message: string) => void
@@ -11,63 +17,65 @@ export default function ChatInput({ onSendMessage, disabled = false }: ChatInput
 	const [message, setMessage] = useState('')
 	const [isListening, setIsListening] = useState(false)
 	const [speechSupported, setSpeechSupported] = useState(false)
+
 	const textareaRef = useRef<HTMLTextAreaElement>(null)
-	const recognitionRef = useRef<SpeechRecognition | null>(null)
+	const recognitionRef = useRef<any>(null)
 
-	// Initialize speech recognition
+	// Khởi tạo Speech Recognition
 	useEffect(() => {
-		if (typeof window !== 'undefined') {
-			const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition
-			if (SpeechRecognition) {
-				setSpeechSupported(true)
-				const recognition = new SpeechRecognition()
-				recognition.continuous = false
-				recognition.interimResults = true
-				recognition.lang = 'vi-VN' // Vietnamese language
+		const { webkitSpeechRecognition, SpeechRecognition } = window as unknown as IWindow;
+		const SpeechRecognitionApi = SpeechRecognition || webkitSpeechRecognition;
 
-				recognition.onstart = () => {
-					setIsListening(true)
-				}
+		if (SpeechRecognitionApi) {
+			setSpeechSupported(true)
+			const recognition = new SpeechRecognitionApi()
+			recognition.continuous = true // Cho phép nói liên tục
+			recognition.interimResults = true // Lấy kết quả tạm thời (hiển thị ngay khi nói)
+			recognition.lang = 'vi-VN'
 
-				recognition.onresult = (event: SpeechRecognitionEvent) => {
-					let finalTranscript = ''
-					let interimTranscript = ''
+			recognition.onstart = () => setIsListening(true)
+			recognition.onend = () => setIsListening(false)
 
-					for (let i = event.resultIndex; i < event.results.length; i++) {
-						const transcript = event.results[i][0].transcript
-						if (event.results[i].isFinal) {
-							finalTranscript += transcript
-						} else {
-							interimTranscript += transcript
-						}
-					}
-
-					if (finalTranscript) {
-						setMessage(prev => prev + finalTranscript)
-						// Auto-resize textarea
-						setTimeout(() => {
-							if (textareaRef.current) {
-								textareaRef.current.style.height = 'auto'
-								textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`
-							}
-						}, 0)
-					}
-				}
-
-				recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-					console.error('Speech recognition error:', event.error)
-					setIsListening(false)
-				}
-
-				recognition.onend = () => {
-					setIsListening(false)
-				}
-
-				recognitionRef.current = recognition
+			recognition.onerror = (event: any) => {
+				console.error('Speech recognition error:', event.error)
+				setIsListening(false)
 			}
+
+			recognition.onresult = (event: any) => {
+				let finalTranscript = '';
+
+				// Duyệt qua các kết quả trả về
+				for (let i = event.resultIndex; i < event.results.length; ++i) {
+					if (event.results[i].isFinal) {
+						finalTranscript += event.results[i][0].transcript;
+					}
+				}
+
+				if (finalTranscript) {
+					// Nối thêm văn bản vào ô input hiện tại
+					setMessage(prev => {
+						const newText = prev ? `${prev} ${finalTranscript}` : finalTranscript;
+						return newText;
+					});
+
+					// Auto-resize textarea ngay lập tức
+					adjustTextareaHeight();
+				}
+			}
+
+			recognitionRef.current = recognition
 		}
 	}, [])
 
+	// Hàm chỉnh độ cao textarea
+	const adjustTextareaHeight = () => {
+		if (textareaRef.current) {
+			textareaRef.current.style.height = 'auto'
+			textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`
+		}
+	}
+
+	// Xử lý bật/tắt Mic
 	const handleVoiceInput = () => {
 		if (!speechSupported || disabled) return
 
@@ -78,11 +86,20 @@ export default function ChatInput({ onSendMessage, disabled = false }: ChatInput
 		}
 	}
 
-	const handleSubmit = (e: React.FormEvent) => {
-		e.preventDefault()
+	const handleSubmit = (e?: React.FormEvent) => {
+		if (e) e.preventDefault()
+
 		if (message.trim() && !disabled) {
+			// Nếu đang nghe thì dừng lại khi gửi
+			if (isListening) {
+				recognitionRef.current?.stop();
+				setIsListening(false);
+			}
+
 			onSendMessage(message)
 			setMessage('')
+
+			// Reset height
 			if (textareaRef.current) {
 				textareaRef.current.style.height = 'auto'
 			}
@@ -92,18 +109,13 @@ export default function ChatInput({ onSendMessage, disabled = false }: ChatInput
 	const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault()
-			handleSubmit(e)
+			handleSubmit()
 		}
 	}
 
 	const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
 		setMessage(e.target.value)
-		
-		// Auto-resize textarea
-		if (textareaRef.current) {
-			textareaRef.current.style.height = 'auto'
-			textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`
-		}
+		adjustTextareaHeight()
 	}
 
 	return (
@@ -117,11 +129,15 @@ export default function ChatInput({ onSendMessage, disabled = false }: ChatInput
 				>
 					<Paperclip size={18} />
 				</button>
-				
+
 				{speechSupported && (
 					<button
 						type="button"
 						className={`${styles.micButton} ${isListening ? styles.listening : ''}`}
+						style={{
+							color: isListening ? '#ef4444' : '#6b7280',
+							animation: isListening ? 'pulse 1.5s infinite' : 'none'
+						}}
 						title={isListening ? "Dừng ghi âm" : "Ghi âm giọng nói"}
 						disabled={disabled}
 						onClick={handleVoiceInput}
@@ -129,18 +145,18 @@ export default function ChatInput({ onSendMessage, disabled = false }: ChatInput
 						{isListening ? <MicOff size={18} /> : <Mic size={18} />}
 					</button>
 				)}
-				
+
 				<textarea
 					ref={textareaRef}
 					value={message}
 					onChange={handleInputChange}
 					onKeyDown={handleKeyDown}
-					placeholder={isListening ? "Đang nghe..." : "Nhập tin nhắn của bạn..."}
+					placeholder={isListening ? "Đang nghe bạn nói..." : "Nhập tin nhắn..."}
 					className={styles.messageInput}
 					disabled={disabled}
 					rows={1}
 				/>
-				
+
 				<button
 					type="button"
 					className={styles.emojiButton}
@@ -149,7 +165,7 @@ export default function ChatInput({ onSendMessage, disabled = false }: ChatInput
 				>
 					<Smile size={18} />
 				</button>
-				
+
 				<button
 					type="submit"
 					className={styles.sendButton}
@@ -159,6 +175,13 @@ export default function ChatInput({ onSendMessage, disabled = false }: ChatInput
 					<Send size={18} />
 				</button>
 			</div>
+			<style>{`
+                @keyframes pulse {
+                    0% { transform: scale(1); opacity: 1; }
+                    50% { transform: scale(1.1); opacity: 0.7; }
+                    100% { transform: scale(1); opacity: 1; }
+                }
+            `}</style>
 		</form>
 	)
 }

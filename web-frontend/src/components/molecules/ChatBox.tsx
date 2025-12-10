@@ -24,8 +24,8 @@ interface ChatHistoryItem {
 }
 
 export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JSX.Element {
-	// URL API Gateway
-	const API_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080'}/api/v1/ai/chat`;
+	// URL Gateway
+	const API_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080'}/api/v1/ai/consult`;
 
 	const [messages, setMessages] = useState<Message[]>([
 		{
@@ -38,7 +38,7 @@ export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JS
 	])
 	const [isMinimized, setIsMinimized] = useState(false)
 	const [isTyping, setIsTyping] = useState(false)
-	const [isSoundOn, setIsSoundOn] = useState(true) // Giữ lại nút bật tắt loa để nghe AI nói
+	const [isSoundOn, setIsSoundOn] = useState(true) // Mặc định bật tiếng đọc
 
 	const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -50,32 +50,38 @@ export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JS
 		scrollToBottom()
 	}, [messages, isTyping])
 
-	// --- HÀM XỬ LÝ TEXT (Xóa markdown) ---
+	// --- HÀM 1: LÀM SẠCH VĂN BẢN (Clean Markdown) ---
+	// Loại bỏ các ký tự **, *, #, ` để hiển thị đẹp hơn
 	const cleanMarkdown = (text: string): string => {
 		if (!text) return "";
 		return text
-			.replace(/\*\*/g, '')
-			.replace(/\*/g, '•')
-			.replace(/`/g, '')
-			.replace(/#{1,6}\s/g, '');
+			.replace(/\*\*/g, '')       // Xóa in đậm
+			.replace(/^\s*\*\s/gm, '• ') // Thay dấu * đầu dòng thành dấu chấm tròn
+			.replace(/`/g, '')          // Xóa dấu code
+			.replace(/#{1,6}\s/g, '');  // Xóa header
 	}
 
-	// --- HÀM ĐỌC VĂN BẢN (Text-to-Speech) ---
+	// --- HÀM 2: ĐỌC VĂN BẢN (Text-to-Speech) ---
 	const speakText = (text: string) => {
 		if (!isSoundOn || !window.speechSynthesis) return;
+
+		// Dừng câu đang đọc dở (nếu có)
 		window.speechSynthesis.cancel();
 
+		// Loại bỏ ký tự đặc biệt để máy đọc trơn tru hơn
 		const textToRead = text.replace(/[*`#\-]/g, '');
+
 		const utterance = new SpeechSynthesisUtterance(textToRead);
-		utterance.lang = 'vi-VN';
+		utterance.lang = 'vi-VN'; // Giọng Việt Nam
+		utterance.rate = 1.0;     // Tốc độ bình thường
 		window.speechSynthesis.speak(utterance);
 	}
 
-	// --- HÀM GỬI TIN NHẮN ---
+	// --- HÀM 3: GỬI TIN NHẮN & GỌI API ---
 	const handleSendMessage = async (content: string) => {
 		if (!content || !content.trim()) return
 
-		// 1. Hiển thị tin nhắn User
+		// 1. Hiển thị tin nhắn của User
 		const userMessage: Message = {
 			id: Date.now().toString(),
 			content: content.trim(),
@@ -84,39 +90,27 @@ export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JS
 			type: 'text'
 		}
 		setMessages(prev => [...prev, userMessage])
-		setIsTyping(true)
+		setIsTyping(true) // Hiện "AI đang trả lời..."
 
 		try {
-			// 2. Chuẩn bị messages array (bao gồm history + message mới)
-			const chatMessages: ChatHistoryItem[] = [
-				...messages
-					.filter(m => m.type === 'text')
-					.map(m => ({
-						role: (m.sender === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-						content: m.content
-					})),
-				{
-					role: 'user' as const,
-					content: content
-				}
-			];
+			// 2. Chuẩn bị lịch sử chat để gửi lên Server
+			const history: ChatHistoryItem[] = messages
+				.filter(m => m.type === 'text')
+				.map(m => ({
+					role: m.sender === 'user' ? 'user' : 'assistant',
+					content: m.content
+				}));
 
-			// 3. Gọi API Backend (8080)
-			const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
-			
-			const headers: Record<string, string> = {
-				'Content-Type': 'application/json'
-			};
-			
-			if (token) {
-				headers['Authorization'] = `Bearer ${token}`;
-			}
-			
+			// 3. Gọi API (Gateway 8080)
 			const response = await fetch(API_URL, {
 				method: 'POST',
-				headers,
+				headers: {
+					'Content-Type': 'application/json',
+					// Gateway đã whitelist API này nên không cần Authorization
+				},
 				body: JSON.stringify({
-					messages: chatMessages
+					message: content,
+					history: history
 				})
 			});
 
@@ -124,6 +118,8 @@ export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JS
 
 			if (response.ok && data.success) {
 				const rawContent = data.data.content;
+
+				// Xử lý text trước khi hiển thị
 				const displayContent = cleanMarkdown(rawContent);
 
 				const botMessage: Message = {
@@ -134,21 +130,24 @@ export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JS
 					type: 'text'
 				}
 				setMessages(prev => [...prev, botMessage])
-				speakText(rawContent); // AI Đọc câu trả lời
+
+				// Đọc to câu trả lời
+				speakText(rawContent);
 			} else {
-				throw new Error(data.message || 'Lỗi kết nối');
+				throw new Error(data.message || 'Lỗi phản hồi từ server');
 			}
 
 		} catch (error) {
 			console.error("Chat Error:", error);
 			const errorMessage: Message = {
 				id: (Date.now() + 1).toString(),
-				content: 'Xin lỗi, tôi đang gặp sự cố kết nối.',
+				content: 'Xin lỗi, tôi đang gặp sự cố kết nối mạng. Vui lòng thử lại sau.',
 				sender: 'bot',
 				timestamp: new Date(),
 				type: 'text'
 			}
 			setMessages(prev => [...prev, errorMessage])
+			speakText('Xin lỗi, tôi đang gặp sự cố kết nối mạng.');
 		} finally {
 			setIsTyping(false)
 		}
@@ -215,7 +214,6 @@ export default function ChatBox({ isOpen, onToggle, onClose }: ChatBoxProps): JS
 						</div>
 					</div>
 
-					{/* Input Area: Chỉ việc nhúng ChatInput vào */}
 					<div className={styles.inputArea}>
 						<ChatInput onSendMessage={handleSendMessage} disabled={isTyping} />
 					</div>
